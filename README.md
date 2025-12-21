@@ -68,3 +68,14 @@ tSSS - это защищенный мессенджер с end-to-end шифро
  - read_receipt	Уведомление о прочтении другими	message_id, reader
  - error	Ошибки	message
  - pong	Ответ на ping	-
+
+# Запуск
+
+```
+bore local 5555 --to bore.pub --port 9435
+python server.py
+```
+
+```
+python client.py
+```
