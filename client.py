@@ -138,6 +138,69 @@ class SecureMessengerClient:
         # Бинд Enter на подключение
         self.server_port_entry.bind('<Return>', lambda e: self.connect_from_dialog())
         self.server_host_entry.focus_set()
+
+    def send3(self, data, max_retries=3, retry_delay=0.5):
+        """
+        Безопасная отправка данных с повторными попытками
+        """
+        if not self.connected or not self.client_socket:
+            logger.warning(f"safe_send: Нет подключения, отправка невозможна")
+            return False
+
+        #json_data = json.dumps(data, ensure_ascii=False).encode('utf-8')
+
+        for attempt in range(max_retries):
+            try:
+                # Сохраняем оригинальный таймаут
+                original_timeout = self.client_socket.gettimeout()
+
+                # Устанавливаем таймаут для отправки
+                self.client_socket.settimeout(5.0)
+
+                # Отправляем данные
+                sent = self.client_socket.send(data)
+
+                # Восстанавливаем таймаут
+                self.client_socket.settimeout(original_timeout)
+
+                if sent == len(data):
+                    logger.debug(f"safe_send: Данные успешно отправлены, попытка {attempt + 1}")
+                    return True
+                else:
+                    logger.warning(f"safe_send: Отправлены не все данные: {sent}/{len(data)} байт")
+
+            except socket.timeout:
+                logger.warning(f"safe_send: Таймаут отправки, попытка {attempt + 1}/{max_retries}")
+
+            except socket.error as e:
+                if e.errno == socket.errno.EWOULDBLOCK or e.errno == socket.errno.EAGAIN:
+                    logger.debug(f"safe_send: Сокет заблокирован, попытка {attempt + 1}/{max_retries}")
+                elif e.errno == socket.errno.ECONNRESET:
+                    logger.error(f"safe_send: Соединение разорвано сервером")
+                    self.connected = False
+                    self.status_label.config(text="Отключен")
+                    return False
+                else:
+                    logger.error(f"safe_send: Ошибка сокета: {e}")
+
+            except BrokenPipeError:
+                logger.error(f"safe_send: Соединение разорвано (Broken Pipe)")
+                self.connected = False
+                self.status_label.config(text="Отключен")
+                return False
+
+            except Exception as e:
+                logger.error(f"safe_send: Неизвестная ошибка: {e}")
+
+            # Задержка перед следующей попыткой (экспоненциальная)
+            if attempt < max_retries - 1:
+                delay = retry_delay * (2 ** attempt)  # 0.5, 1.0, 2.0 секунды
+                logger.debug(f"safe_send: Ожидание {delay:.1f}с перед повторной попыткой")
+                time.sleep(delay)
+
+        logger.error(f"safe_send: Не удалось отправить данные после {max_retries} попыток")
+        return False
+
     
     def connect_from_dialog(self):
         """Подключение к серверу с введенными параметрами"""
@@ -505,7 +568,7 @@ class SecureMessengerClient:
         logger.debug(f"show_all_users: Отправка запроса всех пользователей")
         
         try:
-            self.client_socket.send(json.dumps(data).encode('utf-8'))
+            self.send3(json.dumps(data).encode('utf-8'))
             logger.debug(f"show_all_users: Запрос отправлен")
         except Exception as e:
             logger.error(f"show_all_users: Ошибка отправки запроса: {e}")
@@ -540,7 +603,7 @@ class SecureMessengerClient:
         logger.debug(f"do_search: Отправка запроса поиска: {data}")
         
         try:
-            self.client_socket.send(json.dumps(data).encode('utf-8'))
+            self.send3(json.dumps(data).encode('utf-8'))
             logger.debug(f"do_search: Запрос поиска отправлен: {search_term}, online_only={self.online_only_var.get()}")
         except Exception as e:
             logger.error(f"do_search: Ошибка отправки запроса поиска: {e}")
@@ -977,7 +1040,7 @@ class SecureMessengerClient:
         logger.debug(f"send_ping: Отправка ping: {data}")
         
         try:
-            self.client_socket.send(json.dumps(data).encode('utf-8'))
+            self.send3(json.dumps(data).encode('utf-8'))
             logger.debug(f"send_ping: Ping отправлен")
         except Exception as e:
             logger.error(f"send_ping: Ошибка отправки ping: {e}")
@@ -1033,7 +1096,7 @@ class SecureMessengerClient:
                 logger.debug(f"send_read_receipts_for_unread: Отправка read_receipt для сообщения {message_id}")
 
                 try:
-                    self.client_socket.send(json.dumps(data).encode('utf-8'))
+                    self.send3(json.dumps(data).encode('utf-8'))
                     logger.debug(f"send_read_receipts_for_unread: Read_receipt отправлен")
                 except Exception as e:
                     logger.error(f"send_read_receipts_for_unread: Ошибка отправки: {e}")
@@ -1097,7 +1160,7 @@ class SecureMessengerClient:
         logger.debug(f"request_public_key: Запрос ключа для {username}")
         
         try:
-            self.client_socket.send(json.dumps(data).encode('utf-8'))
+            self.send3(json.dumps(data).encode('utf-8'))
             logger.debug(f"request_public_key: Запрос ключа отправлен")
         except Exception as e:
             logger.error(f"request_public_key: Ошибка отправки запроса ключа: {e}")
@@ -1218,7 +1281,7 @@ class SecureMessengerClient:
         logger.debug(f"on_typing: Отправка статуса печатания: {data}")
         
         try:
-            self.client_socket.send(json.dumps(data).encode('utf-8'))
+            self.send3(json.dumps(data).encode('utf-8'))
             logger.debug(f"on_typing: Статус печатания отправлен")
         except Exception as e:
             logger.error(f"on_typing: Ошибка отправки статуса печатания: {e}")
@@ -1241,7 +1304,7 @@ class SecureMessengerClient:
         logger.debug(f"stop_typing: Отправка статуса остановки печатания: {data}")
         
         try:
-            self.client_socket.send(json.dumps(data).encode('utf-8'))
+            self.send3(json.dumps(data).encode('utf-8'))
             logger.debug(f"stop_typing: Статус остановки печатания отправлен")
         except Exception as e:
             logger.error(f"stop_typing: Ошибка отправки статуса: {e}")
@@ -1428,7 +1491,7 @@ class SecureMessengerClient:
             logger.debug(f"  Длина зашифрованного ключа: {len(data['session_key'])}")
             
             logger.debug(f"send_message: Отправка сообщения на сервер")
-            self.client_socket.send(json.dumps(data).encode('utf-8'))
+            self.send3(json.dumps(data).encode('utf-8'))
             logger.info(f"send_message: Сообщение {message_id} отправлено на сервер")
             
             self.add_message_to_chat(
@@ -2064,7 +2127,7 @@ class SecureMessengerClient:
         logger.debug(f"send_delivery_status: Данные для отправки: {data}")
         
         try:
-            self.client_socket.send(json.dumps(data).encode('utf-8'))
+            self.send3(json.dumps(data).encode('utf-8'))
             logger.info(f"send_delivery_status: Статус {status} для сообщения {message_id} отправлен получателю {recipient}")
         except Exception as e:
             logger.error(f"send_delivery_status: Ошибка отправки статуса: {e}")
