@@ -79,3 +79,22 @@ python server.py
 ```
 python client.py
 ```
+
+
+# Telnet syntax
+```
+telnet bore.pub 9435
+```
+```
+{"type":"register","username":"vasya","public_key":"-----BEGIN PUBLIC KEY-----
+\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA6P5g9Nn9h0QxX2zJ7M8D\nLwT3f7Hv4X8Kk9mD5tRwV1Y5X6sT7b2N1P3qZ8rF4aG2yV9cL1bN3pQ5tRwV1Y5\nX6sT7b2N1P3qZ8rF4aG2yV9cL1bN3pQ5tRwV1Y5X6sT7b2N1P3qZ8rF4aG2yV9c\nL1bN3pQ5tRwV1Y5X6sT7b2N1P3qZ8rF4aG2yV9cL1bN3pQ5tRwV1Y5X6sT7b2N1\nP3qZ8rF4aG2yV9cL1bN3pQ5tRwV1Y5X6sT7b2N1P3qZ8rF4aG2yV9cL1bN3pQ5t\nRwV1Y5X6sT7b2N1P3qZ8rF4aG2yV9cL1bN3pQ5tRwV1Y5X6sT7b2N1P3qZ8rF4a\nG2yV9cL1bN3pQ5tRwV1Y5X6sT7b2N1P3qZ8rF4aG2yV9cL1bN3pQ5tRwV1Y5X6s\n-----END PUBLIC KEY-----"}
+```
+```
+"type":"ping","username":"vasya"}
+```
+{"type":"search","username":"alex","online_only":false}
+```
+```
+{"type":"get_key","username":"alex"}
+```
+
