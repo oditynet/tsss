@@ -92,6 +92,7 @@ telnet bore.pub 9435
 ```
 "type":"ping","username":"vasya"}
 ```
+```
 {"type":"search","username":"alex","online_only":false}
 ```
 ```
