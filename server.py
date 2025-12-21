@@ -175,6 +175,7 @@ class SecureMessengerServer:
             'register': self.handle_register,
             'search': self.handle_search,
             'get_key': self.handle_get_key,
+            'get_all_users': self.handle_get_all_users,
             'message': self.handle_message,
             'typing': self.handle_typing,
             'delivery_status': self.handle_delivery_status,
@@ -199,7 +200,7 @@ class SecureMessengerServer:
             logger.error(f"handle_ping: Ошибка отправки pong: {e}")
     
     def handle_register(self, client_socket, message, address):
-        """Регистрация пользователя"""
+        """Регистрация пользователя с проверкой уникальности ключа"""
         username = message.get('username')
         public_key = message.get('public_key')
         
@@ -215,6 +216,44 @@ class SecureMessengerServer:
             logger.warning(f"handle_register: Неверный публичный ключ, длина: {len(public_key) if public_key else 0}")
             self.send_error(client_socket, "Неверный публичный ключ")
             return
+        
+        # Проверяем уникальность логина и ключа
+        with self.db_lock:
+            cursor = self.conn.cursor()
+            
+            # Проверяем, существует ли пользователь с таким логином
+            cursor.execute('SELECT username FROM users WHERE username = ?', (username,))
+            existing_user = cursor.fetchone()
+            
+            if existing_user:
+                logger.warning(f"handle_register: Пользователь {username} уже существует")
+                
+                # Проверяем, совпадает ли ключ
+                cursor.execute('SELECT public_key FROM users WHERE username = ?', (username,))
+                existing_key_row = cursor.fetchone()
+                
+                if existing_key_row and existing_key_row['public_key'] == public_key:
+                    logger.debug(f"handle_register: Ключ совпадает, разрешаем вход")
+                    # Ключ совпадает - это тот же пользователь
+                else:
+                    logger.error(f"handle_register: Пользователь {username} уже существует с другим ключом")
+                    self.send_json(client_socket, {
+                        'type': 'register_denied',
+                        'message': f'Пользователь "{username}" уже зарегистрирован с другим ключом'
+                    })
+                    return
+            
+            # Проверяем, не используется ли этот ключ другим пользователем
+            cursor.execute('SELECT username FROM users WHERE public_key = ?', (public_key,))
+            key_owner = cursor.fetchone()
+            
+            if key_owner and key_owner['username'] != username:
+                logger.error(f"handle_register: Публичный ключ уже используется пользователем {key_owner['username']}")
+                self.send_json(client_socket, {
+                    'type': 'register_denied',
+                    'message': f'Публичный ключ уже используется пользователем "{key_owner["username"]}"'
+                })
+                return
         
         with self.clients_lock:
             logger.debug(f"handle_register: Проверка существующего подключения для {username}")
@@ -260,11 +299,11 @@ class SecureMessengerServer:
                 self.conn.commit()
                 logger.debug(f"handle_register: Пользователь {username} сохранен в БД")
             
-            logger.info(f"handle_register: Пользователь {username} успешно зарегистрирован с {address}")
+            logger.info(f"handle_register: Пользователь {username} успешно зарегистрирован/авторизован с {address}")
             
             response = {
                 'type': 'register_ok',
-                'message': 'Регистрация успешна',
+                'message': 'Регистрация/авторизация успешна',
                 'username': username
             }
             self.send_json(client_socket, response)
@@ -373,6 +412,67 @@ class SecureMessengerServer:
         }
         
         logger.debug(f"handle_search: Отправка результатов: {response}")
+        self.send_json(client_socket, response)
+    
+    def handle_get_all_users(self, client_socket, message, address):
+        """Обработка запроса всех пользователей"""
+        logger.debug(f"handle_get_all_users: Запрос всех пользователей от {address}")
+        
+        with self.clients_lock:
+            current_user = self.clients.get(client_socket, {}).get('username')
+        
+        if not current_user:
+            logger.warning(f"handle_get_all_users: Запрос от незарегистрированного пользователя")
+            self.send_error(client_socket, "Сначала зарегистрируйтесь")
+            return
+        
+        logger.debug(f"handle_get_all_users: Текущий пользователь: {current_user}")
+        
+        results = []
+        all_users_set = set()
+        
+        # Добавляем онлайн пользователей
+        with self.clients_lock:
+            online_users = list(self.user_sockets.keys())
+            logger.debug(f"handle_get_all_users: Онлайн пользователи: {online_users}")
+            
+            for username in online_users:
+                if username != current_user:
+                    all_users_set.add(username)
+                    results.append({
+                        'username': username,
+                        'online': True
+                    })
+                    logger.debug(f"handle_get_all_users: Добавлен онлайн пользователь: {username}")
+        
+        # Добавляем оффлайн пользователей из БД
+        with self.db_lock:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                SELECT username FROM users 
+                WHERE username != ?
+                ORDER BY username
+            ''', (current_user,))
+            
+            db_users = cursor.fetchall()
+            logger.debug(f"handle_get_all_users: Найдено {len(db_users)} пользователей в БД")
+            
+            for row in db_users:
+                username = row['username']
+                if username not in all_users_set:
+                    is_online = username in self.user_sockets
+                    results.append({
+                        'username': username,
+                        'online': is_online
+                    })
+                    logger.debug(f"handle_get_all_users: Добавлен пользователь из БД: {username}, онлайн: {is_online}")
+        
+        response = {
+            'type': 'all_users',
+            'users': results
+        }
+        
+        logger.debug(f"handle_get_all_users: Отправка {len(results)} пользователей")
         self.send_json(client_socket, response)
     
     def handle_get_key(self, client_socket, message, address):

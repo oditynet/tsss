@@ -35,8 +35,9 @@ class SecureMessengerClient:
         self.root.geometry("1000x800")
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
-        self.server_host = "bore.pub"
-        self.server_port = 9435
+        # Значения по умолчанию
+        self.server_host = "localhost"
+        self.server_port = 5555
         
         self.username = None
         self.private_key = None
@@ -77,7 +78,127 @@ class SecureMessengerClient:
         logger.debug(f"__init__: Сообщения загружены: {list(self.messages.keys())}")
         
         self.setup_ui()
-        self.load_or_register()
+        self.show_connection_dialog()
+    
+    def show_connection_dialog(self):
+        """Диалог для ввода IP и порта сервера"""
+        logger.debug(f"show_connection_dialog: Показ диалога подключения")
+        
+        self.conn_dialog = tk.Toplevel(self.root)
+        self.conn_dialog.title("Подключение к серверу")
+        self.conn_dialog.geometry("400x200")
+        self.conn_dialog.transient(self.root)
+        self.conn_dialog.grab_set()
+        
+        # Центрирование диалога
+        self.conn_dialog.geometry("+{}+{}".format(
+            self.root.winfo_rootx() + 50,
+            self.root.winfo_rooty() + 50
+        ))
+        
+        # Запрет закрытия через крестик
+        self.conn_dialog.protocol("WM_DELETE_WINDOW", lambda: None)
+        
+        main_frame = ttk.Frame(self.conn_dialog, padding=20)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(main_frame, text="Настройки подключения", 
+                 font=('Arial', 12, 'bold')).pack(pady=(0, 20))
+        
+        # Поле для IP адреса
+        ip_frame = ttk.Frame(main_frame)
+        ip_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Label(ip_frame, text="IP адрес сервера:", width=20).pack(side=tk.LEFT)
+        self.server_host_var = tk.StringVar(value=self.server_host)
+        self.server_host_entry = ttk.Entry(ip_frame, textvariable=self.server_host_var, width=25)
+        self.server_host_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        # Поле для порта
+        port_frame = ttk.Frame(main_frame)
+        port_frame.pack(fill=tk.X, pady=(0, 20))
+        
+        ttk.Label(port_frame, text="Порт сервера:", width=20).pack(side=tk.LEFT)
+        self.server_port_var = tk.StringVar(value=str(self.server_port))
+        self.server_port_entry = ttk.Entry(port_frame, textvariable=self.server_port_var, width=25)
+        self.server_port_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        # Кнопки
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill=tk.X)
+        
+        connect_btn = ttk.Button(btn_frame, text="Подключиться", 
+                                command=self.connect_from_dialog)
+        connect_btn.pack(side=tk.LEFT, padx=(0, 10))
+        
+        exit_btn = ttk.Button(btn_frame, text="Выход", 
+                             command=self.exit_app)
+        exit_btn.pack(side=tk.LEFT)
+        
+        # Бинд Enter на подключение
+        self.server_port_entry.bind('<Return>', lambda e: self.connect_from_dialog())
+        self.server_host_entry.focus_set()
+    
+    def connect_from_dialog(self):
+        """Подключение к серверу с введенными параметрами"""
+        logger.debug(f"connect_from_dialog: Подключение с параметрами из диалога")
+        
+        host = self.server_host_var.get().strip()
+        port_str = self.server_port_var.get().strip()
+        
+        if not host:
+            messagebox.showerror("Ошибка", "Введите IP адрес сервера")
+            return
+        
+        if not port_str:
+            messagebox.showerror("Ошибка", "Введите порт сервера")
+            return
+        
+        try:
+            port = int(port_str)
+            if port < 1 or port > 65535:
+                raise ValueError
+        except ValueError:
+            messagebox.showerror("Ошибка", "Порт должен быть числом от 1 до 65535")
+            return
+        
+        self.server_host = host
+        self.server_port = port
+        
+        # Пробуем подключиться к серверу
+        if self.test_server_connection():
+            self.conn_dialog.destroy()
+            self.load_or_register()
+        else:
+            messagebox.showerror("Ошибка", 
+                "Не удалось подключиться к серверу.\n"
+                "Проверьте правильность IP адреса и порта.")
+    
+    def test_server_connection(self):
+        """Тестовое подключение к серверу"""
+        logger.debug(f"test_server_connection: Тест подключения к {self.server_host}:{self.server_port}")
+        
+        test_socket = None
+        try:
+            test_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            test_socket.settimeout(3.0)
+            test_socket.connect((self.server_host, self.server_port))
+            test_socket.close()
+            logger.debug(f"test_server_connection: Подключение успешно")
+            return True
+        except Exception as e:
+            logger.error(f"test_server_connection: Ошибка подключения: {e}")
+            if test_socket:
+                try:
+                    test_socket.close()
+                except:
+                    pass
+            return False
+    
+    def exit_app(self):
+        """Выход из приложения"""
+        logger.debug(f"exit_app: Выход из приложения")
+        self.root.destroy()
     
     def setup_ui(self):
         logger.debug(f"setup_ui: Настройка пользовательского интерфейса")
@@ -96,6 +217,11 @@ class SecureMessengerClient:
 
         self.profile_label = ttk.Label(profile_frame, text="", font=('Arial', 12, 'bold'))
         self.profile_label.pack(anchor=tk.W)
+
+        # Кнопка повторного входа
+        #self.relogin_btn = ttk.Button(profile_frame, text="Войти под другим именем",
+        #                             command=self.relogin, width=20, state='disabled')
+        #self.relogin_btn.pack(fill=tk.X, pady=(5, 0))
 
         # Кнопка поиска пользователей
         search_frame = ttk.Frame(left_panel)
@@ -219,6 +345,48 @@ class SecureMessengerClient:
 
         logger.debug(f"setup_ui: Интерфейс настроен")
     
+    def relogin(self):
+        """Повторный вход под другим именем"""
+        logger.debug(f"relogin: Запрос повторного входа")
+        
+        if messagebox.askyesno("Подтверждение", 
+                              "Вы хотите выйти и войти под другим именем?\n"
+                              "Текущая сессия будет завершена."):
+            self.cleanup_and_relogin()
+    
+    def cleanup_and_relogin(self):
+        """Очистка и подготовка к повторному входу"""
+        logger.debug(f"cleanup_and_relogin: Очистка текущей сессии")
+        
+        # Закрываем соединение
+        if self.client_socket:
+            try:
+                self.client_socket.close()
+            except:
+                pass
+        
+        self.connected = False
+        self.username = None
+        self.private_key = None
+        self.public_key = None
+        self.public_key_pem = None
+        self.symmetric_key = None
+        self.client_socket = None
+        
+        # Очищаем интерфейс
+        self.profile_label.config(text="")
+        self.chat_header.config(text="Выберите контакт")
+        self.contacts_listbox.delete(0, tk.END)
+        self.chat_display.config(state='normal')
+        self.chat_display.delete('1.0', tk.END)
+        self.chat_display.config(state='disabled')
+        
+        # Отключаем кнопку повторного входа
+        self.relogin_btn.config(state='disabled')
+        
+        # Показываем диалог входа/регистрации
+        self.load_or_register()
+    
     def on_key_press(self, event):
         """Обработка нажатия клавиш в поле ввода"""
         logger.debug(f"on_key_press: Клавиша: {event.keysym}, состояние: {event.state}")
@@ -263,15 +431,20 @@ class SecureMessengerClient:
         search_frame = ttk.Frame(dialog)
         search_frame.pack(fill=tk.X, padx=10, pady=10)
         
-        ttk.Label(search_frame, text="Имя пользователя:").pack(side=tk.LEFT)
+        ttk.Label(search_frame, text="Пользователи").pack(side=tk.LEFT)
         
         self.search_var = tk.StringVar()
-        search_entry = ttk.Entry(search_frame, textvariable=self.search_var, width=30)
+        search_entry = ttk.Entry(search_frame, textvariable=self.search_var, width=24)
         search_entry.pack(side=tk.LEFT, padx=(10, 5), fill=tk.X, expand=True)
         
         search_btn = ttk.Button(search_frame, text="Найти", 
                                command=self.do_search)
         search_btn.pack(side=tk.RIGHT)
+        
+        # Кнопка показать всех
+        show_all_btn = ttk.Button(search_frame, text="Показать всех",
+                                 command=self.show_all_users, width=15)
+        show_all_btn.pack(side=tk.RIGHT, padx=(5, 0))
         
         # Флажок "только онлайн"
         options_frame = ttk.Frame(dialog)
@@ -314,6 +487,29 @@ class SecureMessengerClient:
         
         search_entry.bind('<Return>', lambda e: self.do_search())
         search_entry.focus_set()
+    
+    def show_all_users(self):
+        """Показать всех зарегистрированных пользователей"""
+        logger.debug(f"show_all_users: Запрос всех пользователей")
+        
+        if not self.connected:
+            logger.warning(f"show_all_users: Нет подключения к серверу")
+            messagebox.showerror("Ошибка", "Нет подключения к серверу")
+            return
+        
+        data = {
+            'type': 'get_all_users',
+            'username': self.username
+        }
+        
+        logger.debug(f"show_all_users: Отправка запроса всех пользователей")
+        
+        try:
+            self.client_socket.send(json.dumps(data).encode('utf-8'))
+            logger.debug(f"show_all_users: Запрос отправлен")
+        except Exception as e:
+            logger.error(f"show_all_users: Ошибка отправки запроса: {e}")
+            messagebox.showerror("Ошибка", "Не удалось получить список пользователей")
     
     def close_search_dialog(self):
         logger.debug(f"close_search_dialog: Закрытие диалога поиска")
@@ -381,8 +577,6 @@ class SecureMessengerClient:
         
         if username not in self.messages:
             self.messages[username] = []
-            #logger.debug(f"start_chat_with_user: Создана новая история для {username}")
-            #self.save_messages_delayed()
         
         contacts_list = self.contacts_listbox.get(0, tk.END)
         logger.debug(f"start_chat_with_user: Текущие контакты в списке: {contacts_list}")
@@ -421,48 +615,112 @@ class SecureMessengerClient:
         
         self.dialog = tk.Toplevel(self.root)
         self.dialog.title("Регистрация")
-        self.dialog.geometry("350x280")
+        self.dialog.geometry("350x300")
         self.dialog.transient(self.root)
         self.dialog.grab_set()
         
-        ttk.Label(self.dialog, text="Логин:").pack(pady=(20, 5))
-        self.reg_username = ttk.Entry(self.dialog, width=30)
-        self.reg_username.pack()
+        # Центрирование
+        self.dialog.geometry("+{}+{}".format(
+            self.root.winfo_rootx() + 100,
+            self.root.winfo_rooty() + 100
+        ))
         
-        ttk.Label(self.dialog, text="Пароль:").pack(pady=(10, 5))
-        self.reg_password = ttk.Entry(self.dialog, width=30, show="*")
-        self.reg_password.pack()
+        main_frame = ttk.Frame(self.dialog, padding=20)
+        main_frame.pack(fill=tk.BOTH, expand=True)
         
-        ttk.Label(self.dialog, text="Повторите пароль:").pack(pady=(10, 5))
-        self.reg_password_confirm = ttk.Entry(self.dialog, width=30, show="*")
-        self.reg_password_confirm.pack()
+        ttk.Label(main_frame, text="Регистрация", font=('Arial', 12, 'bold')).pack(pady=(0, 15))
         
-        reg_btn = ttk.Button(self.dialog, text="Зарегистрироваться", command=self.do_register)
-        reg_btn.pack(pady=15)
+        # Поля ввода
+        fields_frame = ttk.Frame(main_frame)
+        fields_frame.pack(fill=tk.X)
         
-        self.dialog.bind('<Return>', lambda e: self.do_register())
+        ttk.Label(fields_frame, text="Логин:").grid(row=0, column=0, sticky=tk.W, pady=(0, 5))
+        self.reg_username = ttk.Entry(fields_frame, width=30)
+        self.reg_username.grid(row=0, column=1, sticky=tk.W+tk.E, pady=(0, 5), padx=(10, 0))
+        
+        ttk.Label(fields_frame, text="Пароль:").grid(row=1, column=0, sticky=tk.W, pady=(0, 5))
+        self.reg_password = ttk.Entry(fields_frame, width=30, show="*")
+        self.reg_password.grid(row=1, column=1, sticky=tk.W+tk.E, pady=(0, 5), padx=(10, 0))
+        
+        ttk.Label(fields_frame, text="Повторите пароль:").grid(row=2, column=0, sticky=tk.W, pady=(0, 5))
+        self.reg_password_confirm = ttk.Entry(fields_frame, width=30, show="*")
+        self.reg_password_confirm.grid(row=2, column=1, sticky=tk.W+tk.E, pady=(0, 5), padx=(10, 0))
+        
+        # Кнопка регистрации
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(pady=(15, 0))
+        
+        reg_btn = ttk.Button(btn_frame, text="Зарегистрироваться", command=self.do_register)
+        reg_btn.pack(side=tk.LEFT, padx=(0, 10))
+        
+        back_btn = ttk.Button(btn_frame, text="Назад", command=self.show_connection_dialog_from_reg)
+        back_btn.pack(side=tk.LEFT)
+        
+        # Бинды на Enter
+        self.reg_password_confirm.bind('<Return>', lambda e: self.do_register())
+        self.reg_username.focus_set()
+        
+        fields_frame.columnconfigure(1, weight=1)
+    
+    def show_connection_dialog_from_reg(self):
+        """Возврат к диалогу подключения из регистрации"""
+        if self.dialog:
+            self.dialog.destroy()
+        self.show_connection_dialog()
     
     def show_login_dialog(self):
         logger.debug(f"show_login_dialog: Показ диалога входа")
         
         self.dialog = tk.Toplevel(self.root)
         self.dialog.title("Вход")
-        self.dialog.geometry("300x200")
+        self.dialog.geometry("300x250")
         self.dialog.transient(self.root)
         self.dialog.grab_set()
         
-        ttk.Label(self.dialog, text="Логин:").pack(pady=(20, 5))
-        self.login_username = ttk.Entry(self.dialog, width=30)
-        self.login_username.pack()
+        # Центрирование
+        self.dialog.geometry("+{}+{}".format(
+            self.root.winfo_rootx() + 100,
+            self.root.winfo_rooty() + 100
+        ))
         
-        ttk.Label(self.dialog, text="Пароль:").pack(pady=(10, 5))
-        self.login_password = ttk.Entry(self.dialog, width=30, show="*")
-        self.login_password.pack()
+        main_frame = ttk.Frame(self.dialog, padding=20)
+        main_frame.pack(fill=tk.BOTH, expand=True)
         
-        login_btn = ttk.Button(self.dialog, text="Войти", command=self.do_login)
-        login_btn.pack(pady=15)
+        ttk.Label(main_frame, text="Вход", font=('Arial', 12, 'bold')).pack(pady=(0, 15))
         
-        self.dialog.bind('<Return>', lambda e: self.do_login())
+        # Поля ввода
+        fields_frame = ttk.Frame(main_frame)
+        fields_frame.pack(fill=tk.X)
+        
+        ttk.Label(fields_frame, text="Логин:").grid(row=0, column=0, sticky=tk.W, pady=(0, 10))
+        self.login_username = ttk.Entry(fields_frame, width=30)
+        self.login_username.grid(row=0, column=1, sticky=tk.W+tk.E, pady=(0, 10), padx=(10, 0))
+        
+        ttk.Label(fields_frame, text="Пароль:").grid(row=1, column=0, sticky=tk.W, pady=(0, 10))
+        self.login_password = ttk.Entry(fields_frame, width=30, show="*")
+        self.login_password.grid(row=1, column=1, sticky=tk.W+tk.E, pady=(0, 10), padx=(10, 0))
+        
+        # Кнопки
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(pady=(15, 0))
+        
+        login_btn = ttk.Button(btn_frame, text="Войти", command=self.do_login)
+        login_btn.pack(side=tk.LEFT, padx=(0, 10))
+        
+        back_btn = ttk.Button(btn_frame, text="Назад", command=self.show_connection_dialog_from_login)
+        back_btn.pack(side=tk.LEFT)
+        
+        # Бинды на Enter
+        self.login_password.bind('<Return>', lambda e: self.do_login())
+        self.login_username.focus_set()
+        
+        fields_frame.columnconfigure(1, weight=1)
+    
+    def show_connection_dialog_from_login(self):
+        """Возврат к диалогу подключения из логина"""
+        if self.dialog:
+            self.dialog.destroy()
+        self.show_connection_dialog()
     
     def do_register(self):
         username = self.reg_username.get().strip()
@@ -484,12 +742,15 @@ class SecureMessengerClient:
         self.generate_keys(username, password)
         
         if self.connect_to_server():
-            self.send_public_key()
-            self.dialog.destroy()
-            self.root.deiconify()
-            self.profile_label.config(text=f"{username}")
-            self.load_history_contacts()
-            logger.debug(f"do_register: Регистрация успешна для {username}")
+            if self.send_public_key():
+                self.dialog.destroy()
+                self.root.deiconify()
+                self.profile_label.config(text=f"{username}")
+                self.relogin_btn.config(state='normal')
+                self.load_history_contacts()
+                logger.debug(f"do_register: Регистрация успешна для {username}")
+            else:
+                logger.error(f"do_register: Регистрация отклонена сервером")
         else:
             logger.error(f"do_register: Не удалось подключиться к серверу")
             messagebox.showerror("Ошибка", "Не удалось подключиться к серверу")
@@ -502,12 +763,15 @@ class SecureMessengerClient:
         
         if self.load_keys(username, password):
             if self.connect_to_server():
-                self.send_public_key()
-                self.dialog.destroy()
-                self.root.deiconify()
-                self.profile_label.config(text=f"{username}")
-                self.load_history_contacts()
-                logger.debug(f"do_login: Вход успешен для {username}")
+                if self.send_public_key():
+                    self.dialog.destroy()
+                    self.root.deiconify()
+                    self.profile_label.config(text=f"{username}")
+                    self.relogin_btn.config(state='normal')
+                    self.load_history_contacts()
+                    logger.debug(f"do_login: Вход успешен для {username}")
+                else:
+                    logger.error(f"do_login: Авторизация отклонена сервером")
             else:
                 logger.error(f"do_login: Не удалось подключиться к серверу")
                 messagebox.showerror("Ошибка", "Не удалось подключиться к серверу")
@@ -535,10 +799,6 @@ class SecureMessengerClient:
 
             unread = 0
             for msg in messages:
-                # Сообщение непрочитано, если:
-                # 1. Оно не исходящее (не от нас)
-                # 2. Не имеет статуса 'read'
-                # 3. Не было помечено как прочитанное
                 if (not msg.get('outgoing', False) and
                         msg.get('status') != 'read' and
                         not msg.get('read', False)):
@@ -552,15 +812,13 @@ class SecureMessengerClient:
         """Загрузка истории контактов с учетом непрочитанных сообщений"""
         logger.debug(f"load_history_contacts: Загрузка истории контактов")
 
-        # Сначала вычисляем непрочитанные сообщения
         self.calculate_unread_counts()
 
         self.contacts_listbox.delete(0, tk.END)
 
-        # Сортируем контакты по времени последнего сообщения (сначала новые)
         sorted_contacts = []
         for username in self.messages.keys():
-            if username != self.username:# and self.messages[username]:
+            if username != self.username:
                 last_message_time = max(
                     [datetime.fromisoformat(msg['timestamp'])
                      for msg in self.messages[username]
@@ -569,18 +827,14 @@ class SecureMessengerClient:
                 )
                 sorted_contacts.append((last_message_time, username))
 
-        # Сортируем по времени (сначала новые)
         sorted_contacts.sort(reverse=True)
 
         for _, username in sorted_contacts:
-            # Добавляем индикатор непрочитанных сообщений
             unread_count = self.unread_counts.get(username, 0)
             display_name = f"{username} ({unread_count})" if unread_count > 0 else username
-
             self.contacts_listbox.insert(tk.END, display_name)
             logger.debug(f"load_history_contacts: Добавлен контакт: {display_name}")
 
-        # Автоматически выделяем первый контакт, если нет активного
         if self.contacts_listbox.size() > 0 and not self.active_chat:
             self.contacts_listbox.selection_set(0)
             self.contacts_listbox.activate(0)
@@ -588,7 +842,6 @@ class SecureMessengerClient:
             self.active_chat = selected_user
             logger.debug(f"load_history_contacts: Автоматически выбран первый контакт: {self.active_chat}")
 
-            # Загружаем чат
             self.root.after(100, lambda: self.on_contact_select(None))
     
     def generate_keys(self, username, password):
@@ -602,7 +855,6 @@ class SecureMessengerClient:
             backend=default_backend()
         )
         self.public_key = self.private_key.public_key()
-        
         
         self.public_key_pem = self.public_key.public_bytes(
             encoding=serialization.Encoding.PEM,
@@ -628,8 +880,6 @@ class SecureMessengerClient:
         
         cipher = Fernet(self.symmetric_key)
         encrypted_data = cipher.encrypt(private_key_pem)
-        
-        print(self.public_key_pem.decode('utf-8'))
         
         with open("user_data.bin", "wb") as f:
             f.write(salt)
@@ -737,7 +987,7 @@ class SecureMessengerClient:
     def send_public_key(self):
         if not self.connected:
             logger.warning(f"send_public_key: Нет подключения, ключ не отправлен")
-            return
+            return False
         
         data = {
             'type': 'register',
@@ -751,10 +1001,12 @@ class SecureMessengerClient:
         try:
             self.client_socket.send(json.dumps(data).encode('utf-8'))
             logger.debug(f"send_public_key: Публичный ключ отправлен")
+            return True
         except Exception as e:
             logger.error(f"send_public_key: Ошибка отправки ключа: {e}")
             self.connected = False
             self.status_label.config(text="Отключен")
+            return False
 
     def send_read_receipts_for_unread(self, username):
         """Отправляет уведомления о прочтении для всех непрочитанных сообщений"""
@@ -764,7 +1016,6 @@ class SecureMessengerClient:
             return
 
         if username in self.messages:
-            # Находим все непрочитанные сообщения
             unread_message_ids = []
             for msg in self.messages[username]:
                 if (not msg.get('outgoing', False) and
@@ -772,7 +1023,6 @@ class SecureMessengerClient:
                         msg.get('id')):
                     unread_message_ids.append(msg['id'])
 
-            # Отправляем уведомления для каждого сообщения
             for message_id in unread_message_ids:
                 data = {
                     'type': 'read_receipt',
@@ -798,7 +1048,6 @@ class SecureMessengerClient:
                     msg['status'] = 'read'
                     msg['read'] = True
                     logger.debug(f"mark_messages_as_read: Сообщение {msg.get('id')} помечено как прочитанное")
-            #self.save_messages_delayed()
 
     def on_contact_select(self, event):
         """Обработка выбора контакта в списке"""
@@ -811,28 +1060,21 @@ class SecureMessengerClient:
         username = self.get_username_from_display(display_text)
         logger.debug(f"on_contact_select: Выбран контакт: {username}")
 
-        # Помечаем все сообщения от этого пользователя как прочитанные
         self.mark_messages_as_read(username)
 
-        # Сбрасываем счетчик непрочитанных для этого пользователя
         if username in self.unread_counts:
             del self.unread_counts[username]
 
-        # Устанавливаем активный чат
         self.active_chat = username
         self.chat_header.config(text=f"Чат с {username}")
         logger.debug(f"on_contact_select: Активный чат установлен: {self.active_chat}")
 
-        # Загружаем историю чата
         self.load_chat()
 
-        # Отправляем уведомления о прочтении для последних сообщений
         self.send_read_receipts_for_unread(username)
 
-        # Обновляем список контактов (чтобы убрать счетчик непрочитанных)
         self.load_history_contacts()
 
-        # Запрашиваем публичный ключ, если его нет
         if username not in self.contacts:
             logger.debug(f"on_contact_select: Ключ для {username} не найден, запрос...")
             self.request_public_key(username)
@@ -840,7 +1082,6 @@ class SecureMessengerClient:
             logger.debug(f"on_contact_select: Ключ для {username} уже загружен")
             self.update_verification_status()
 
-        # Фокус на поле ввода
         self.message_entry.focus_set()
     
     def request_public_key(self, username):
@@ -1139,7 +1380,6 @@ class SecureMessengerClient:
                         encrypted_file_session_key
                     ).decode('utf-8')
                     
-                    # Вставляем зашифрованное содержимое файла в сообщение
                     message_data['file_info']['content'] = base64.b64encode(
                         file_content_encrypted
                     ).decode('utf-8')
@@ -1343,12 +1583,10 @@ class SecureMessengerClient:
         """Обновление статуса сообщения"""
         logger.debug(f"update_message_status: Обновление статуса для сообщения {message_id} на {status}")
         
-        # Обновляем в message_status
         if message_id in self.message_status:
             logger.debug(f"update_message_status: Найдено в message_status")
             self.message_status[message_id]['status'] = status
         
-        # Обновляем в истории сообщений
         if self.active_chat:
             updated = False
             for msg in self.messages.get(self.active_chat, []):
@@ -1364,7 +1602,6 @@ class SecureMessengerClient:
                 self.load_chat()
                 #self.save_messages_delayed()
         else:
-            # Ищем во всех чатах
             for username, messages in self.messages.items():
                 for msg in messages:
                     if msg.get('id') == message_id:
@@ -1398,7 +1635,6 @@ class SecureMessengerClient:
 
                 tag_name = f"msg_{msg_idx}"
 
-                # Настройка тега для сообщения
                 self.chat_display.tag_config(tag_name, spacing1=2, spacing3=2,
                                            lmargin1=5, lmargin2=5, rmargin=5)
 
@@ -1466,7 +1702,6 @@ class SecureMessengerClient:
                 buffer += decoded_data
                 logger.debug(f"receive_messages: Буфер после добавления: {len(buffer)} символов")
                 
-                # Обрабатываем все полные JSON-сообщения в буфере
                 while True:
                     start_idx = buffer.find('{')
                     if start_idx == -1:
@@ -1525,6 +1760,10 @@ class SecureMessengerClient:
             users = message.get('users', [])
             self.all_users = users
             logger.debug(f"process_server_message: Получен список всех пользователей: {len(users)} пользователей")
+            
+            # Отображаем результаты в диалоге поиска
+            if hasattr(self, 'results_listbox') and self.results_listbox:
+                self.show_search_results(users, "Все пользователи")
             
         elif msg_type == 'search_results':
             results = message.get('results', [])
@@ -1605,6 +1844,13 @@ class SecureMessengerClient:
         elif msg_type == 'register_ok':
             logger.debug(f"process_server_message: Регистрация/авторизация успешна")
             
+        elif msg_type == 'register_denied':
+            error_msg = message.get('message', 'Регистрация/авторизация отклонена')
+            logger.error(f"process_server_message: Регистрация/авторизация отклонена: {error_msg}")
+            if os.path.exists("user_data.bin"):
+              os.remove("user_data.bin")
+            self.root.after(0, lambda: self.handle_registration_denied(error_msg))
+                
         elif msg_type == 'disconnect':
             disconnect_msg = message.get('message', '')
             logger.warning(f"process_server_message: Отключение от сервера: {disconnect_msg}")
@@ -1613,6 +1859,25 @@ class SecureMessengerClient:
             
         else:
             logger.warning(f"process_server_message: Неизвестный тип сообщения: {msg_type}")
+    
+    def handle_registration_denied(self, error_msg):
+        """Обработка отказа в регистрации/авторизации"""
+        logger.debug(f"handle_registration_denied: Обработка отказа: {error_msg}")
+        
+        messagebox.showerror("Отказ в доступе", error_msg)
+        
+        # Закрываем соединение
+        if self.client_socket:
+            try:
+                self.client_socket.close()
+            except:
+                pass
+        
+        self.connected = False
+        self.status_label.config(text="Отключен")
+        
+        # Показываем диалог регистрации/логина заново
+        self.load_or_register()
     
     def show_search_results(self, results, search_term):
         logger.debug(f"show_search_results: Отображение результатов поиска: {len(results)} результатов")
@@ -1716,7 +1981,6 @@ class SecureMessengerClient:
 
             if not found:
                 logger.debug(f"process_incoming_message: Добавление нового контакта: {from_user}")
-                # Показываем счетчик непрочитанных
                 unread_count = self.unread_counts.get(from_user, 0)
                 display_name = f"{from_user} ({unread_count})" if unread_count > 0 else from_user
                 self.contacts_listbox.insert(tk.END, display_name)
@@ -1724,7 +1988,6 @@ class SecureMessengerClient:
             if self.active_chat == from_user:
                 logger.debug(f"process_incoming_message: Активный чат совпадает, отображение сообщения")
                 
-                # Помечаем как прочитанное (так как чат активен)
                 message_status = 'read'
 
                 self.add_message_to_chat(
@@ -1739,10 +2002,8 @@ class SecureMessengerClient:
                     } if has_file else None
                 )
 
-                # Отправляем статус прочтения
                 self.send_delivery_status(message_id, 'read')
 
-                # Сбрасываем счетчик непрочитанных для активного чата
                 if from_user in self.unread_counts:
                     del self.unread_counts[from_user]
                     self.load_history_contacts()
@@ -1752,7 +2013,6 @@ class SecureMessengerClient:
                 if from_user not in self.messages:
                     self.messages[from_user] = []
 
-                # Для неактивного чата сообщение не прочитано
                 msg_record = {
                     'from': sender,
                     'text': text,
@@ -1760,8 +2020,8 @@ class SecureMessengerClient:
                     'outgoing': False,
                     'id': message_id,
                     'has_file': has_file,
-                    'status': 'delivered',  # Только доставлено
-                    'read': False  # Не прочитано
+                    'status': 'delivered',
+                    'read': False
                 }
 
                 if has_file and file_info:
@@ -1770,10 +2030,8 @@ class SecureMessengerClient:
                 self.messages[from_user].append(msg_record)
                 logger.debug(f"process_incoming_message: Сообщение сохранено в историю")
 
-                # Обновляем список контактов с учетом счетчика
                 self.load_history_contacts()
 
-                # Отправляем статус доставки
                 self.send_delivery_status(message_id, 'delivered', from_user)
 
                 #self.save_messages_delayed()
@@ -1854,8 +2112,8 @@ class SecureMessengerClient:
     def on_closing(self):
         logger.debug(f"on_closing: Закрытие приложения")
         
-        #self.save_messages()
-        #logger.debug(f"on_closing: Сообщения сохранены")
+        self.save_messages()
+        logger.debug(f"on_closing: Сообщения сохранены")
         
         if self.client_socket:
             logger.debug(f"on_closing: Закрытие сокета клиента")
