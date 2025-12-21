@@ -1,9 +1,13 @@
-<a name="readme-top"></a>
+<img alt="GitHub code size in bytes" src="https://img.shields.io/github/languages/code-size/oditynet/tSSS"></img>
+<img alt="GitHub license" src="https://img.shields.io/github/license/oditynet/tSSS"></img>
+<img alt="GitHub commit activity" src="https://img.shields.io/github/commit-activity/m/oditynet/tSSS"></img>
+<img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/oditynet/tSSS"></img>
+
 <div align="center">
-    
-<br>
-    
-# tSSS 
+  <img src="https://github.com/oditynet/tSSS/blob/main/logo.jpg" width="250" height="auto" />
+  <h1>  tSSS </h1>
+</div>
+
 
 <a name="readme-left"></a>
 <div align="left">
