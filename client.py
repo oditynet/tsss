@@ -35,8 +35,8 @@ class SecureMessengerClient:
         self.root.geometry("1000x800")
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
-        self.server_host = "localhost"
-        self.server_port = 5555
+        self.server_host = "bore.pub"
+        self.server_port = 9435
         
         self.username = None
         self.private_key = None
@@ -224,7 +224,7 @@ class SecureMessengerClient:
         logger.debug(f"on_key_press: Клавиша: {event.keysym}, состояние: {event.state}")
         
         # Enter без модификаторов - отправка
-        if (event.keysym == 'Return' or event.keysym == 'KP_Enter') and event.state == 16:
+        if (event.keysym == 'Return' or event.keysym == 'KP_Enter') :
             logger.debug(f"on_key_press: Enter без модификаторов - отправка")
             self.send_message()
             return "break"  # Предотвращаем стандартную обработку
