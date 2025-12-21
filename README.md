@@ -5,7 +5,6 @@
 
 <div align="center">
   <img src="https://github.com/oditynet/tSSS/blob/main/logo.jpg" width="250" height="auto" />
-  <h1>  tSSS </h1>
 </div>
 
 
