@@ -99,3 +99,6 @@ telnet bore.pub 9435
 {"type":"get_key","username":"alex"}
 ```
 
+<img src="https://github.com/oditynet/tsss/blob/main/connect.png" title="example" width="800" />
+<img src="https://github.com/oditynet/tsss/blob/main/search.png" title="example" width="800" />
+<img src="https://github.com/oditynet/tsss/blob/main/messages.png" title="example" width="800" />
