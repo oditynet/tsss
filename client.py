@@ -69,10 +69,12 @@ class SecureMessengerClient:
         
         self.file_storage = {}
         
-        self.search_dialog = None
-        
         # Счетчики непрочитанных сообщений
         self.unread_counts = {}  # username -> количество непрочитанных сообщений
+        
+        # Состояние поиска
+        self.is_search_mode = False
+        self.original_contacts = []  # Оригинальный список контактов до поиска
         
         logger.debug(f"__init__: Инициализация клиента")
         logger.debug(f"__init__: Сообщения загружены: {list(self.messages.keys())}")
@@ -147,8 +149,6 @@ class SecureMessengerClient:
             logger.warning(f"safe_send: Нет подключения, отправка невозможна")
             return False
 
-        #json_data = json.dumps(data, ensure_ascii=False).encode('utf-8')
-
         for attempt in range(max_retries):
             try:
                 # Сохраняем оригинальный таймаут
@@ -200,7 +200,6 @@ class SecureMessengerClient:
 
         logger.error(f"safe_send: Не удалось отправить данные после {max_retries} попыток")
         return False
-
     
     def connect_from_dialog(self):
         """Подключение к серверу с введенными параметрами"""
@@ -281,18 +280,21 @@ class SecureMessengerClient:
         self.profile_label = ttk.Label(profile_frame, text="", font=('Arial', 12, 'bold'))
         self.profile_label.pack(anchor=tk.W)
 
-        # Кнопка повторного входа
-        #self.relogin_btn = ttk.Button(profile_frame, text="Войти под другим именем",
-        #                             command=self.relogin, width=20, state='disabled')
-        #self.relogin_btn.pack(fill=tk.X, pady=(5, 0))
-
-        # Кнопка поиска пользователей
+        # Поле поиска
         search_frame = ttk.Frame(left_panel)
         search_frame.pack(fill=tk.X, pady=(0, 10))
 
-        search_btn = ttk.Button(search_frame, text="Найти пользователей",
-                               command=self.show_search_dialog, width=20)
-        search_btn.pack(fill=tk.X)
+        ttk.Label(search_frame, text="Поиск:").pack(anchor=tk.W, pady=(0, 5))
+        
+        self.search_var = tk.StringVar()
+        self.search_entry = ttk.Entry(search_frame, textvariable=self.search_var, width=20)
+        self.search_entry.pack(fill=tk.X)
+        
+        # Бинды для поля поиска
+        self.search_entry.bind('<FocusIn>', self.on_search_focus_in)
+        self.search_entry.bind('<FocusOut>', self.on_search_focus_out)
+        self.search_entry.bind('<Return>', self.on_search_enter)
+        self.search_entry.bind('<KeyRelease>', self.on_search_key_release)
 
         # Список контактов
         contacts_label = ttk.Label(left_panel, text="История переписки",
@@ -408,6 +410,241 @@ class SecureMessengerClient:
 
         logger.debug(f"setup_ui: Интерфейс настроен")
     
+    def on_search_focus_in(self, event):
+        """При фокусе на поле поиска сохраняем текущий список контактов"""
+        logger.debug(f"on_search_focus_in: Фокус на поле поиска")
+        
+        if not self.is_search_mode:
+            # Сохраняем текущий список контактов
+            self.original_contacts = list(self.contacts_listbox.get(0, tk.END))
+            self.is_search_mode = True
+            logger.debug(f"on_search_focus_in: Сохранено {len(self.original_contacts)} контактов")
+    
+    def on_search_focus_out(self, event):
+        """При потере фокуса с поля поиска, если поле пустое, восстанавливаем список"""
+        logger.debug(f"on_search_focus_out: Потеря фокуса с поля поиска")
+        
+        if self.is_search_mode and not self.search_var.get().strip():
+            self.restore_original_contacts()
+    
+    def on_search_key_release(self, event):
+        """При изменении текста в поле поиска"""
+        search_text = self.search_var.get().strip()
+        
+        if not search_text and self.is_search_mode:
+            # Если поле пустое, восстанавливаем оригинальный список
+            self.restore_original_contacts()
+    
+    def on_search_enter(self, event):
+        """При нажатии Enter в поле поиска"""
+        logger.debug(f"on_search_enter: Поиск по нажатию Enter")
+        
+        search_text = self.search_var.get().strip()
+        if not search_text:
+            logger.debug(f"on_search_enter: Пустой запрос поиска")
+            return
+        
+        if not self.connected:
+            logger.warning(f"on_search_enter: Нет подключения к серверу")
+            messagebox.showerror("Ошибка", "Нет подключения к серверу")
+            return
+        
+        logger.debug(f"on_search_enter: Выполнение поиска: '{search_text}'")
+        
+        # Отправляем запрос на поиск
+        data = {
+            'type': 'search',
+            'username': search_text,
+            'online_only': False
+        }
+        
+        try:
+            self.send3(json.dumps(data).encode('utf-8'))
+            logger.debug(f"on_search_enter: Запрос поиска отправлен")
+        except Exception as e:
+            logger.error(f"on_search_enter: Ошибка отправки запроса поиска: {e}")
+            messagebox.showerror("Ошибка", "Не удалось выполнить поиск")
+    
+    def restore_original_contacts(self):
+        """Восстановление оригинального списка контактов"""
+        logger.debug(f"restore_original_contacts: Восстановление оригинальных контактов")
+        
+        self.is_search_mode = False
+        self.contacts_listbox.delete(0, tk.END)
+        
+        for contact in self.original_contacts:
+            self.contacts_listbox.insert(tk.END, contact)
+        
+        self.original_contacts = []
+        logger.debug(f"restore_original_contacts: Восстановлено {self.contacts_listbox.size()} контактов")
+    
+    def show_search_results_in_listbox(self, results, search_term):
+        """Отображение результатов поиска в списке контактов"""
+        logger.debug(f"show_search_results_in_listbox: Отображение результатов поиска в списке")
+        
+        self.is_search_mode = True
+        
+        # Сохраняем оригинальный список, если еще не сохранен
+        if not self.original_contacts:
+            self.original_contacts = list(self.contacts_listbox.get(0, tk.END))
+            logger.debug(f"show_search_results_in_listbox: Сохранено оригинальных контактов: {len(self.original_contacts)}")
+        
+        # Очищаем список
+        self.contacts_listbox.delete(0, tk.END)
+        
+        if not results:
+            logger.debug(f"show_search_results_in_listbox: Нет результатов, добавление заглушки")
+            self.contacts_listbox.insert(tk.END, f"По запросу '{search_term}' ничего не найдено")
+            return
+        
+        logger.debug(f"show_search_results_in_listbox: Добавление {len(results)} результатов")
+        
+        for user in results:
+            username = user.get('username')
+            online = user.get('online', False)
+            status = "🟢" if online else "⚫"
+            display_text = f"{status} {username}"
+            
+            if username != self.username:  # Не показываем себя в результатах
+                self.contacts_listbox.insert(tk.END, display_text)
+                logger.debug(f"show_search_results_in_listbox: Добавлен результат: {display_text}")
+        
+        if self.contacts_listbox.size() > 0:
+            # Автоматически выбираем первый результат
+            self.contacts_listbox.selection_set(0)
+            self.contacts_listbox.activate(0)
+            logger.debug(f"show_search_results_in_listbox: Автоматически выбран первый результат")
+    
+    def on_contact_select(self, event):
+        """Обработка выбора контакта в списке"""
+        selection = self.contacts_listbox.curselection()
+        if not selection:
+            logger.debug(f"on_contact_select: Не выбран контакт")
+            return
+
+        display_text = self.contacts_listbox.get(selection[0])
+        logger.debug(f"on_contact_select: Выбран элемент: '{display_text}'")
+        
+        # Проверяем, находимся ли мы в режиме поиска
+        if self.is_search_mode:
+            # Проверяем, что это не заглушка "ничего не найдено"
+            if "ничего не найдено" in display_text:
+                logger.debug(f"on_contact_select: Выбрана заглушка 'ничего не найдено'")
+                return
+            
+            # Извлекаем имя пользователя из строки результата поиска
+            # Формат: "🟢 username" или "⚫ username"
+            parts = display_text.split(' ', 1)
+            if len(parts) > 1:
+                username = parts[1].strip()
+            else:
+                username = display_text.strip()
+            
+            logger.debug(f"on_contact_select: Извлечено имя пользователя: {username}")
+            
+            # Очищаем поле поиска
+            self.search_entry.delete(0, tk.END)
+            self.search_var.set("")
+            
+            # Восстанавливаем оригинальный список контактов
+            self.restore_original_contacts()
+            
+            # Добавляем выбранного пользователя в список контактов (если его там нет)
+            # и начинаем с ним чат
+            self.start_chat_with_user(username)
+            
+        else:
+            # Обычный режим - работа с историей переписки
+            username = self.get_username_from_display(display_text)
+            logger.debug(f"on_contact_select: Выбран контакт: {username}")
+
+            self.mark_messages_as_read(username)
+
+            if username in self.unread_counts:
+                del self.unread_counts[username]
+
+            self.active_chat = username
+            self.chat_header.config(text=f"Чат с {username}")
+            logger.debug(f"on_contact_select: Активный чат установлен: {self.active_chat}")
+
+            self.load_chat()
+
+            self.send_read_receipts_for_unread(username)
+
+            self.load_history_contacts()
+
+            if username not in self.contacts:
+                logger.debug(f"on_contact_select: Ключ для {username} не найден, запрос...")
+                self.request_public_key(username)
+            else:
+                logger.debug(f"on_contact_select: Ключ для {username} уже загружен")
+                self.update_verification_status()
+
+            self.message_entry.focus_set()
+    
+    def start_chat_with_user(self, username):
+        logger.debug(f"start_chat_with_user: Начало чата с пользователем: {username}")
+        
+        if username == self.username:
+            logger.warning(f"start_chat_with_user: Попытка начать чат с самим собой")
+            messagebox.showinfo("Информация", "Нельзя начать чат с самим собой")
+            return
+        
+        logger.debug(f"start_chat_with_user: Текущие сообщения: {list(self.messages.keys())}")
+        
+        if username not in self.messages:
+            self.messages[username] = []
+        
+        # Проверяем, есть ли пользователь в списке контактов
+        contacts_list = list(self.contacts_listbox.get(0, tk.END))
+        user_found = False
+        
+        for i, item in enumerate(contacts_list):
+            item_username = self.get_username_from_display(item)
+            if item_username == username:
+                user_found = True
+                # Выбираем этого пользователя
+                self.contacts_listbox.selection_clear(0, tk.END)
+                self.contacts_listbox.selection_set(i)
+                self.contacts_listbox.activate(i)
+                logger.debug(f"start_chat_with_user: Пользователь найден в списке на позиции {i}")
+                break
+        
+        if not user_found:
+            # Добавляем пользователя в список контактов
+            unread_count = self.unread_counts.get(username, 0)
+            display_name = f"{username} ({unread_count})" if unread_count > 0 else username
+            self.contacts_listbox.insert(tk.END, display_name)
+            
+            # Выбираем его
+            last_index = self.contacts_listbox.size() - 1
+            self.contacts_listbox.selection_set(last_index)
+            self.contacts_listbox.activate(last_index)
+            logger.debug(f"start_chat_with_user: Пользователь добавлен в список контактов: {display_name}")
+        
+        # Прокручиваем к выбранному пользователю
+        self.contacts_listbox.see(self.contacts_listbox.curselection()[0])
+        
+        # Активируем чат с этим пользователем
+        self.active_chat = username
+        self.chat_header.config(text=f"Чат с {username}")
+        
+        self.mark_messages_as_read(username)
+        self.load_chat()
+        
+        if username in self.unread_counts:
+            del self.unread_counts[username]
+        
+        self.load_history_contacts()
+        
+        if username not in self.contacts:
+            self.request_public_key(username)
+        else:
+            self.update_verification_status()
+        
+        self.message_entry.focus_set()
+        logger.debug(f"start_chat_with_user: Чат с {username} активирован")
+    
     def relogin(self):
         """Повторный вход под другим именем"""
         logger.debug(f"relogin: Запрос повторного входа")
@@ -443,9 +680,7 @@ class SecureMessengerClient:
         self.chat_display.config(state='normal')
         self.chat_display.delete('1.0', tk.END)
         self.chat_display.config(state='disabled')
-        
-        # Отключаем кнопку повторного входа
-        self.relogin_btn.config(state='disabled')
+        self.search_entry.delete(0, tk.END)
         
         # Показываем диалог входа/регистрации
         self.load_or_register()
@@ -473,195 +708,6 @@ class SecureMessengerClient:
             return "break"
         
         return None
-    
-    def show_search_dialog(self):
-        logger.debug(f"show_search_dialog: Открытие диалога поиска")
-        
-        if self.search_dialog and self.search_dialog.winfo_exists():
-            self.search_dialog.lift()
-            return
-        
-        self.search_dialog = tk.Toplevel(self.root)
-        dialog = self.search_dialog
-        dialog.title("Поиск пользователей")
-        dialog.geometry("500x500")
-        dialog.transient(self.root)
-        dialog.grab_set()
-        
-        dialog.protocol("WM_DELETE_WINDOW", lambda: self.close_search_dialog())
-        
-        # Поле поиска
-        search_frame = ttk.Frame(dialog)
-        search_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        ttk.Label(search_frame, text="Пользователи").pack(side=tk.LEFT)
-        
-        self.search_var = tk.StringVar()
-        search_entry = ttk.Entry(search_frame, textvariable=self.search_var, width=24)
-        search_entry.pack(side=tk.LEFT, padx=(10, 5), fill=tk.X, expand=True)
-        
-        search_btn = ttk.Button(search_frame, text="Найти", 
-                               command=self.do_search)
-        search_btn.pack(side=tk.RIGHT)
-        
-        # Кнопка показать всех
-        show_all_btn = ttk.Button(search_frame, text="Показать всех",
-                                 command=self.show_all_users, width=15)
-        show_all_btn.pack(side=tk.RIGHT, padx=(5, 0))
-        
-        # Флажок "только онлайн"
-        options_frame = ttk.Frame(dialog)
-        options_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
-        
-        self.online_only_var = tk.BooleanVar(value=False)
-        online_only_check = ttk.Checkbutton(
-            options_frame, 
-            text="Только онлайн пользователи",
-            variable=self.online_only_var
-        )
-        online_only_check.pack(anchor=tk.W)
-        
-        # Список результатов
-        results_frame = ttk.Frame(dialog)
-        results_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
-        
-        results_label = ttk.Label(results_frame, text="Результаты поиска:", 
-                                 font=('Arial', 10, 'bold'))
-        results_label.pack(anchor=tk.W, pady=(0, 5))
-        
-        self.results_listbox = tk.Listbox(results_frame, height=15, font=('Arial', 10))
-        self.results_listbox.pack(fill=tk.BOTH, expand=True)
-        
-        scrollbar = ttk.Scrollbar(self.results_listbox)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.results_listbox.config(yscrollcommand=scrollbar.set)
-        scrollbar.config(command=self.results_listbox.yview)
-        
-        # Кнопки
-        btn_frame = ttk.Frame(dialog)
-        btn_frame.pack(pady=(0, 10))
-        
-        select_btn = ttk.Button(btn_frame, text="Начать чат", 
-                               command=lambda: self.select_search_result(dialog))
-        select_btn.pack(side=tk.LEFT, padx=5)
-        
-        close_btn = ttk.Button(btn_frame, text="Закрыть", command=self.close_search_dialog)
-        close_btn.pack(side=tk.LEFT, padx=5)
-        
-        search_entry.bind('<Return>', lambda e: self.do_search())
-        search_entry.focus_set()
-    
-    def show_all_users(self):
-        """Показать всех зарегистрированных пользователей"""
-        logger.debug(f"show_all_users: Запрос всех пользователей")
-        
-        if not self.connected:
-            logger.warning(f"show_all_users: Нет подключения к серверу")
-            messagebox.showerror("Ошибка", "Нет подключения к серверу")
-            return
-        
-        data = {
-            'type': 'get_all_users',
-            'username': self.username
-        }
-        
-        logger.debug(f"show_all_users: Отправка запроса всех пользователей")
-        
-        try:
-            self.send3(json.dumps(data).encode('utf-8'))
-            logger.debug(f"show_all_users: Запрос отправлен")
-        except Exception as e:
-            logger.error(f"show_all_users: Ошибка отправки запроса: {e}")
-            messagebox.showerror("Ошибка", "Не удалось получить список пользователей")
-    
-    def close_search_dialog(self):
-        logger.debug(f"close_search_dialog: Закрытие диалога поиска")
-        if self.search_dialog:
-            self.search_dialog.destroy()
-            self.search_dialog = None
-    
-    def do_search(self):
-        logger.debug(f"do_search: Выполнение поиска")
-        
-        if not self.connected:
-            logger.warning(f"do_search: Нет подключения к серверу")
-            messagebox.showerror("Ошибка", "Нет подключения к серверу")
-            return
-        
-        search_term = self.search_var.get().strip()
-        if not search_term:
-            logger.warning(f"do_search: Пустой поисковый запрос")
-            messagebox.showwarning("Предупреждение", "Введите текст для поиска")
-            return
-        
-        data = {
-            'type': 'search',
-            'username': search_term,
-            'online_only': self.online_only_var.get()
-        }
-        
-        logger.debug(f"do_search: Отправка запроса поиска: {data}")
-        
-        try:
-            self.send3(json.dumps(data).encode('utf-8'))
-            logger.debug(f"do_search: Запрос поиска отправлен: {search_term}, online_only={self.online_only_var.get()}")
-        except Exception as e:
-            logger.error(f"do_search: Ошибка отправки запроса поиска: {e}")
-            messagebox.showerror("Ошибка", "Не удалось выполнить поиск")
-    
-    def select_search_result(self, dialog):
-        logger.debug(f"select_search_result: Выбор результата поиска")
-        
-        selection = self.results_listbox.curselection()
-        if not selection:
-            logger.warning(f"select_search_result: Не выбран пользователь")
-            messagebox.showwarning("Предупреждение", "Выберите пользователя из списка")
-            return
-        
-        username = self.results_listbox.get(selection[0])
-        logger.debug(f"select_search_result: Выбран пользователь: {username}")
-        
-        if " " in username:
-            username = username.split(" ", 1)[0]
-            logger.debug(f"select_search_result: Имя пользователя после обработки: {username}")
-        
-        self.close_search_dialog()
-        self.start_chat_with_user(username)
-    
-    def start_chat_with_user(self, username):
-        logger.debug(f"start_chat_with_user: Начало чата с пользователем: {username}")
-        
-        if username == self.username:
-            logger.warning(f"start_chat_with_user: Попытка начать чат с самим собой")
-            messagebox.showinfo("Информация", "Нельзя начать чат с самим собой")
-            return
-        
-        logger.debug(f"start_chat_with_user: Текущие сообщения: {list(self.messages.keys())}")
-        
-        if username not in self.messages:
-            self.messages[username] = []
-        
-        contacts_list = self.contacts_listbox.get(0, tk.END)
-        logger.debug(f"start_chat_with_user: Текущие контакты в списке: {contacts_list}")
-        
-        if username not in contacts_list:
-            # Проверяем, есть ли непрочитанные сообщения для этого пользователя
-            unread_count = self.unread_counts.get(username, 0)
-            display_name = f"{username} ({unread_count})" if unread_count > 0 else username
-            self.contacts_listbox.insert(tk.END, display_name)
-            logger.debug(f"start_chat_with_user: Добавлен в список контактов: {display_name}")
-        
-        for i in range(self.contacts_listbox.size()):
-            item = self.contacts_listbox.get(i)
-            item_username = self.get_username_from_display(item)
-            if item_username == username:
-                self.contacts_listbox.selection_clear(0, tk.END)
-                self.contacts_listbox.selection_set(i)
-                self.contacts_listbox.activate(i)
-                logger.debug(f"start_chat_with_user: Выбран контакт {username} на позиции {i}")
-                break
-        
-        self.on_contact_select(None)
     
     def load_or_register(self):
         logger.debug(f"load_or_register: Проверка существования пользователя")
@@ -809,7 +855,6 @@ class SecureMessengerClient:
                 self.dialog.destroy()
                 self.root.deiconify()
                 self.profile_label.config(text=f"{username}")
-                self.relogin_btn.config(state='normal')
                 self.load_history_contacts()
                 logger.debug(f"do_register: Регистрация успешна для {username}")
             else:
@@ -830,7 +875,6 @@ class SecureMessengerClient:
                     self.dialog.destroy()
                     self.root.deiconify()
                     self.profile_label.config(text=f"{username}")
-                    self.relogin_btn.config(state='normal')
                     self.load_history_contacts()
                     logger.debug(f"do_login: Вход успешен для {username}")
                 else:
@@ -1112,41 +1156,6 @@ class SecureMessengerClient:
                     msg['read'] = True
                     logger.debug(f"mark_messages_as_read: Сообщение {msg.get('id')} помечено как прочитанное")
 
-    def on_contact_select(self, event):
-        """Обработка выбора контакта в списке"""
-        selection = self.contacts_listbox.curselection()
-        if not selection:
-            logger.debug(f"on_contact_select: Не выбран контакт")
-            return
-
-        display_text = self.contacts_listbox.get(selection[0])
-        username = self.get_username_from_display(display_text)
-        logger.debug(f"on_contact_select: Выбран контакт: {username}")
-
-        self.mark_messages_as_read(username)
-
-        if username in self.unread_counts:
-            del self.unread_counts[username]
-
-        self.active_chat = username
-        self.chat_header.config(text=f"Чат с {username}")
-        logger.debug(f"on_contact_select: Активный чат установлен: {self.active_chat}")
-
-        self.load_chat()
-
-        self.send_read_receipts_for_unread(username)
-
-        self.load_history_contacts()
-
-        if username not in self.contacts:
-            logger.debug(f"on_contact_select: Ключ для {username} не найден, запрос...")
-            self.request_public_key(username)
-        else:
-            logger.debug(f"on_contact_select: Ключ для {username} уже загружен")
-            self.update_verification_status()
-
-        self.message_entry.focus_set()
-    
     def request_public_key(self, username):
         if not self.connected:
             logger.warning(f"request_public_key: Нет подключения, запрос ключа не отправлен")
@@ -1824,17 +1833,14 @@ class SecureMessengerClient:
             self.all_users = users
             logger.debug(f"process_server_message: Получен список всех пользователей: {len(users)} пользователей")
             
-            # Отображаем результаты в диалоге поиска
-            if hasattr(self, 'results_listbox') and self.results_listbox:
-                self.show_search_results(users, "Все пользователи")
-            
         elif msg_type == 'search_results':
             results = message.get('results', [])
             search_term = message.get('search_term', '')
             
             logger.debug(f"process_server_message: Результаты поиска для '{search_term}': {len(results)} результатов")
             
-            self.show_search_results(results, search_term)
+            # Отображаем результаты в списке контактов
+            self.root.after(0, lambda: self.show_search_results_in_listbox(results, search_term))
             
         elif msg_type == 'key_response':
             username = message.get('username')
@@ -1942,28 +1948,6 @@ class SecureMessengerClient:
         # Показываем диалог регистрации/логина заново
         self.load_or_register()
     
-    def show_search_results(self, results, search_term):
-        logger.debug(f"show_search_results: Отображение результатов поиска: {len(results)} результатов")
-        
-        if hasattr(self, 'results_listbox'):
-            self.results_listbox.delete(0, tk.END)
-            logger.debug(f"show_search_results: Очистка списка результатов")
-            
-            if not results:
-                logger.debug(f"show_search_results: Нет результатов, добавление заглушки")
-                self.results_listbox.insert(tk.END, "Пользователи не найдены")
-                return
-            
-            for user in results:
-                username = user.get('username')
-                online = user.get('online', False)
-                status = "🟢 Онлайн" if online else "Оффлайн"
-                display_text = f"{username} - {status}"
-                self.results_listbox.insert(tk.END, display_text)
-                logger.debug(f"show_search_results: Добавлен результат: {display_text}")
-        else:
-            logger.warning(f"show_search_results: results_listbox не существует")
-
     def process_incoming_message(self, message):
         from_user = message.get('from')
         encrypted_msg = message.get('message')
@@ -2175,16 +2159,12 @@ class SecureMessengerClient:
     def on_closing(self):
         logger.debug(f"on_closing: Закрытие приложения")
         
-        self.save_messages()
-        logger.debug(f"on_closing: Сообщения сохранены")
+        #self.save_messages()
+        #logger.debug(f"on_closing: Сообщения сохранены")
         
         if self.client_socket:
             logger.debug(f"on_closing: Закрытие сокета клиента")
             self.client_socket.close()
-        
-        if self.search_dialog:
-            logger.debug(f"on_closing: Закрытие диалога поиска")
-            self.search_dialog.destroy()
         
         self.root.destroy()
         logger.debug(f"on_closing: Приложение закрыто")
