@@ -169,7 +169,9 @@ class SecureMessengerServer:
         except Exception as e:
             logger.error(f"Ошибка инициализации базы данных: {e}")
             raise
-    
+
+
+
     def start(self):
         try:
             self.server_socket.bind((self.host, self.port))
@@ -183,7 +185,7 @@ class SecureMessengerServer:
                     client_socket, address = self.server_socket.accept()
                     client_socket.settimeout(5.0)
                     
-                    logger.info(f"Новое подключение от {address}")
+                    logger.info(f"!!!!!!!Новое подключение от {address}")
                     logger.debug(f"start: Client socket: {client_socket}, address: {address}")
                     
                     client_thread = threading.Thread(
@@ -207,32 +209,37 @@ class SecureMessengerServer:
             logger.error(f"Ошибка запуска сервера: {e}")
         finally:
             self.cleanup()
-    
+
     def handle_client(self, client_socket, address):
         username = None
         client_id = f"{address}"
-        
+
         logger.debug(f"handle_client: Начало обработки клиента {client_id}, socket: {client_socket}")
-        
+
         try:
             while self.running:
                 try:
                     data = client_socket.recv(65536)
-                    if not data:
+
+                    # Добавьте эту отладочную информацию
+                    logger.debug(f"handle_client: Получено {len(data)} байт от {client_id}")
+                    if data:
+                        logger.debug(f"handle_client: Первые 100 байт данных: {data[:100]}")
+                    else:
                         logger.debug(f"handle_client: Клиент {client_id} отключился (пустые данные)")
                         break
-                    
-                    logger.debug(f"handle_client: Получено {len(data)} байт от {client_id}")
-                    
+
                     try:
                         message = json.loads(data.decode('utf-8'))
                         logger.debug(f"handle_client: JSON парсинг успешен, тип: {message.get('type')}")
                         self.process_message(client_socket, message, address)
                     except json.JSONDecodeError as e:
                         logger.warning(f"handle_client: Некорректный JSON от {address}: {str(e)}")
+                        logger.debug(f"handle_client: Сырые данные: {data[:200]}")
                         self.send_error(client_socket, "Некорректный формат сообщения")
-                        
+
                 except socket.timeout:
+                    #logger.debug(f"handle_client: Таймаут для клиента {client_id}")
                     continue
                 except ConnectionResetError:
                     logger.info(f"handle_client: Соединение разорвано: {address}")
@@ -240,12 +247,166 @@ class SecureMessengerServer:
                 except Exception as e:
                     logger.error(f"handle_client: Ошибка чтения от {address}: {e}")
                     break
-                    
+
         except Exception as e:
             logger.error(f"handle_client: Критическая ошибка в обработчике клиента {address}: {e}")
         finally:
             logger.debug(f"handle_client: Завершение обработки клиента {client_id}")
             self.disconnect_client(username, client_socket, address)
+
+    def send_user_groups(self, username, client_socket):
+        """Отправка пользователю списка групп, в которых он состоит"""
+        logger.debug(f"send_user_groups: Проверка групп для пользователя {username}")
+
+        try:
+            with self.groups_lock:
+                user_groups = []
+
+                # Ищем группы, где пользователь является участником
+                for group_id, group_info in self.groups.items():
+                    if username in group_info['members']:
+                        user_groups.append({
+                            'group_id': group_id,
+                            'group_name': group_info['name'],
+                            'admin': group_info['admin'],
+                            'is_admin': group_info['admin'] == username,
+                            'members': group_info['members']
+                        })
+                        logger.debug(f"send_user_groups: Найдена группа {group_id} для {username}")
+
+                logger.debug(f"send_user_groups: Найдено {len(user_groups)} групп для {username}")
+
+                # Отправляем информацию о группах
+                if user_groups:
+                    for group_data in user_groups:
+                        group_id = group_data['group_id']
+
+                        # Проверяем, есть ли ожидающий ключ для этой группы
+                        if group_id in self.group_pending_keys and username in self.group_pending_keys[group_id]:
+                            encrypted_key = self.group_pending_keys[group_id][username]
+
+                            # Отправляем приглашение в группу
+                            self.send_group_invite_direct(
+                                client_socket,
+                                group_id,
+                                group_data['group_name'],
+                                group_data['admin'],
+                                encrypted_key
+                            )
+
+                            # Удаляем из ожидающих
+                            self.remove_pending_invite(group_id, username)
+                            logger.debug(f"send_user_groups: Отправлено приглашение для группы {group_id}")
+                        else:
+                            # Пользователь уже в группе, отправляем информацию о группе
+                            self.send_json(client_socket, {
+                                'type': 'group_info',
+                                'group_id': group_id,
+                                'group_name': group_data['group_name'],
+                                'admin': group_data['admin'],
+                                'is_admin': group_data['is_admin'],
+                                'members': group_data['members'],
+                                'timestamp': datetime.now().isoformat()
+                            })
+                            logger.debug(f"send_user_groups: Отправлена информация о группе {group_id}")
+
+        except Exception as e:
+            logger.error(f"send_user_groups: Ошибка отправки списка групп: {e}")
+
+    def send_group_invite_direct(self, client_socket, group_id, group_name, admin, encrypted_key):
+        """Прямая отправка приглашения в группу (для использования внутри сервера)"""
+        logger.debug(f"send_group_invite_direct: Отправка приглашения для группы {group_id}")
+
+        try:
+            self.send_json(client_socket, {
+                'type': 'group_invite',
+                'group_id': group_id,
+                'group_name': group_name,
+                'admin': admin,
+                'encrypted_key': encrypted_key,
+                'timestamp': datetime.now().isoformat()
+            })
+            logger.debug(f"send_group_invite_direct: Приглашение отправлено")
+        except Exception as e:
+            logger.error(f"send_group_invite_direct: Ошибка отправки приглашения: {e}")
+    def handle_search(self, client_socket, message, address):
+        """Обработка поиска пользователей"""
+        search_term = message.get('username', '').strip().lower()
+        search_online_only = message.get('online_only', False)
+
+        logger.debug(f"handle_search: Запрос поиска от {address}")
+
+        # Сначала получаем username под блокировкой
+        with self.clients_lock:
+            if client_socket not in self.clients:
+                logger.warning(f"handle_search: Запрос от неаутентифицированного клиента")
+                self.send_error(client_socket, "Сначала зарегистрируйтесь")
+                return
+            current_user = self.clients[client_socket]['username']
+
+        # Далее работаем с копией данных под блокировкой
+        with self.clients_lock:
+            online_users_copy = list(self.user_sockets.keys())
+            public_keys_copy = dict(self.public_keys)
+
+        # Работаем с копиями
+        results = []
+
+        if search_online_only:
+            logger.debug(f"handle_search: Поиск только онлайн пользователей")
+
+            for username in online_users_copy:
+                if username != current_user and search_term in username.lower():
+                    results.append({
+                        'username': username,
+                        'online': True
+                    })
+
+            logger.debug(f"handle_search: Найдено {len(results)} онлайн пользователей")
+        else:
+            logger.debug(f"handle_search: Поиск всех пользователей")
+            all_users_set = set()
+
+            # Онлайн пользователи
+            for username in online_users_copy:
+                if username != current_user and search_term in username.lower():
+                    all_users_set.add(username)
+                    results.append({
+                        'username': username,
+                        'online': True
+                    })
+
+            # Оффлайн пользователи из БД
+            try:
+                with self.db_lock:
+                    cursor = self.conn.cursor()
+                    query = f'%{search_term}%'
+                    cursor.execute('''
+                        SELECT username FROM users 
+                        WHERE LOWER(username) LIKE ? AND username != ?
+                        ORDER BY username
+                    ''', (query, current_user))
+
+                    db_users = cursor.fetchall()
+
+                    for row in db_users:
+                        username = row['username']
+                        if username not in all_users_set:
+                            is_online = username in online_users_copy
+                            results.append({
+                                'username': username,
+                                'online': is_online
+                            })
+            except Exception as e:
+                logger.error(f"handle_search: Ошибка работы с БД: {e}")
+
+        response = {
+            'type': 'search_results',
+            'results': results,
+            'search_term': search_term
+        }
+
+        self.send_json(client_socket, response)
     
     def process_message(self, client_socket, message, address):
         msg_type = message.get('type')
@@ -274,6 +435,7 @@ class SecureMessengerServer:
             'group_message': self.handle_group_message,
             'group_member_added': self.handle_group_member_added,
             'group_member_removed': self.handle_group_member_removed,
+            'group_leave': self.handle_group_leave,
         }
         
         handler = handlers.get(msg_type)
@@ -291,7 +453,202 @@ class SecureMessengerServer:
             logger.debug(f"handle_ping: Pong отправлен {address}")
         except Exception as e:
             logger.error(f"handle_ping: Ошибка отправки pong: {e}")
-    
+
+    def handle_group_leave(self, client_socket, message, address):
+        """Обработка выхода пользователя из группы"""
+        logger.debug(f"handle_group_leave: Обработка выхода из группы")
+
+        with self.clients_lock:
+            sender_info = self.clients.get(client_socket)
+
+        if not sender_info:
+            logger.warning(f"handle_group_leave: Запрос от незарегистрированного клиента")
+            return
+
+        sender = sender_info['username']
+        group_id = message.get('group_id')
+
+        logger.debug(f"handle_group_leave: Выход {sender} из группы {group_id}")
+
+        # Проверяем, существует ли группа
+        with self.groups_lock:
+            if group_id not in self.groups:
+                logger.warning(f"handle_group_leave: Группа {group_id} не найдена")
+                self.send_error(client_socket, "Группа не найдена")
+                return
+
+            group_info = self.groups[group_id]
+
+            # Проверяем, состоит ли пользователь в группе
+            if sender not in group_info['members']:
+                logger.warning(f"handle_group_leave: {sender} не в группе {group_id}")
+                self.send_error(client_socket, "Вы не состоите в этой группе")
+                return
+
+            # Если пользователь - админ, проверяем, не последний ли он
+            if group_info['admin'] == sender:
+                # Проверяем, не последний ли участник
+                if len(group_info['members']) == 1:
+                    # Последний участник - удаляем группу полностью
+                    logger.debug(f"handle_group_leave: Админ {sender} - последний участник, удаляем группу {group_id}")
+                    del self.groups[group_id]
+
+                    # Удаляем из БД
+                    with self.db_lock:
+                        try:
+                            cursor = self.conn.cursor()
+                            cursor.execute('DELETE FROM groups WHERE group_id = ?', (group_id,))
+                            cursor.execute('DELETE FROM group_members WHERE group_id = ?', (group_id,))
+                            cursor.execute('DELETE FROM group_offline_messages WHERE group_id = ?', (group_id,))
+                            cursor.execute('DELETE FROM group_pending_invites WHERE group_id = ?', (group_id,))
+                            self.conn.commit()
+                        except Exception as e:
+                            logger.error(f"handle_group_leave: Ошибка удаления группы из БД: {e}")
+
+                    # Уведомляем всех, что группа удалена
+                    # (в данном случае никого не осталось)
+
+                    logger.info(f"handle_group_leave: Группа {group_id} удалена (последний участник вышел)")
+
+                    # Отправляем подтверждение
+                    self.send_json(client_socket, {
+                        'type': 'group_leave_ok',
+                        'group_id': group_id,
+                        'message': 'Вы вышли из группы. Группа удалена, так как вы были последним участником.'
+                    })
+
+                    return
+                else:
+                    # Назначаем нового админа (первого другого участника)
+                    for member in group_info['members']:
+                        if member != sender:
+                            group_info['admin'] = member
+                            logger.debug(f"handle_group_leave: Новый админ группы {group_id}: {member}")
+                            break
+
+            # Удаляем пользователя из группы
+            group_info['members'].remove(sender)
+            logger.debug(f"handle_group_leave: Пользователь {sender} удален из группы {group_id}")
+
+            # Генерируем новый ключ для оставшихся участников
+            new_key = Fernet.generate_key()
+
+            # Шифруем новый ключ для оставшихся участников
+            encrypted_keys = {}
+
+            for member in group_info['members']:
+                with self.clients_lock:
+                    if member in self.public_keys:
+                        try:
+                            # Загружаем публичный ключ пользователя
+                            public_key_pem = self.public_keys[member]
+                            if isinstance(public_key_pem, str):
+                                public_key = serialization.load_pem_public_key(
+                                    public_key_pem.encode('utf-8'),
+                                    backend=default_backend()
+                                )
+                            else:
+                                public_key = public_key_pem
+
+                            # Шифруем новый ключ
+                            encrypted_key = public_key.encrypt(
+                                new_key,
+                                padding.OAEP(
+                                    mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                                    algorithm=hashes.SHA256(),
+                                    label=None
+                                )
+                            )
+                            encrypted_keys[member] = base64.b64encode(encrypted_key).decode('utf-8')
+
+                        except Exception as e:
+                            logger.error(f"handle_group_leave: Ошибка шифрования для {member}: {e}")
+
+            # Обновляем БД
+            with self.db_lock:
+                try:
+                    cursor = self.conn.cursor()
+
+                    # Удаляем пользователя из таблицы участников
+                    cursor.execute('''
+                        DELETE FROM group_members 
+                        WHERE group_id = ? AND username = ?
+                    ''', (group_id, sender))
+
+                    # Обновляем админа если изменился
+                    cursor.execute('''
+                        UPDATE groups SET admin = ? WHERE group_id = ?
+                    ''', (group_info['admin'], group_id))
+
+                    self.conn.commit()
+                    logger.debug(f"handle_group_leave: БД обновлена")
+
+                except Exception as e:
+                    logger.error(f"handle_group_leave: Ошибка обновления БД: {e}")
+
+            # Отправляем уведомление вышедшему пользователю
+            self.send_group_leave_notification(sender, group_id, group_info['name'])
+
+            # Отправляем новый ключ оставшимся участникам
+            for member in group_info['members']:
+                if member in encrypted_keys:
+                    self.send_group_key_update_leave(group_id, group_info['admin'],
+                                                   member, sender, encrypted_keys[member])
+
+            logger.info(f"handle_group_leave: Пользователь {sender} вышел из группы {group_id}")
+
+            # Отправляем подтверждение
+            self.send_json(client_socket, {
+                'type': 'group_leave_ok',
+                'group_id': group_id,
+                'message': 'Вы вышли из группы'
+            })
+
+    def send_group_leave_notification(self, username, group_id, group_name):
+        """Отправка уведомления о выходе из группы"""
+        logger.debug(f"send_group_leave_notification: Уведомление {username} о выходе из группы")
+
+        with self.clients_lock:
+            user_socket = self.user_sockets.get(username)
+
+        if user_socket:
+            try:
+                self.send_json(user_socket, {
+                    'type': 'group_leave_ok',
+                    'group_id': group_id,
+                    'group_name': group_name,
+                    'message': 'Вы вышли из группы',
+                    'timestamp': datetime.now().isoformat()
+                })
+                logger.debug(f"send_group_leave_notification: Уведомление отправлено {username}")
+            except Exception as e:
+                logger.error(f"send_group_leave_notification: Ошибка отправки {username}: {e}")
+        else:
+            logger.debug(f"send_group_leave_notification: Пользователь {username} оффлайн")
+
+    def send_group_key_update_leave(self, group_id, admin, member, left_member, encrypted_key):
+        """Отправка обновления ключа после выхода участника"""
+        logger.debug(f"send_group_key_update_leave: Отправка обновления ключа для {member}")
+
+        with self.clients_lock:
+            member_socket = self.user_sockets.get(member)
+
+        if member_socket:
+            try:
+                self.send_json(member_socket, {
+                    'type': 'group_member_left',
+                    'group_id': group_id,
+                    'left_member': left_member,
+                    'admin': admin,
+                    'encrypted_key': encrypted_key,
+                    'timestamp': datetime.now().isoformat()
+                })
+                logger.debug(f"send_group_key_update_leave: Обновление ключа отправлено {member}")
+            except Exception as e:
+                logger.error(f"send_group_key_update_leave: Ошибка отправки {member}: {e}")
+        else:
+            logger.debug(f"send_group_key_update_leave: Пользователь {member} оффлайн, обновление не отправлено")
+
     def handle_register(self, client_socket, message, address):
         """Регистрация пользователя с проверкой уникальности ключа и отправкой ожидающих приглашений"""
         username = message.get('username')
@@ -401,10 +758,12 @@ class SecureMessengerServer:
             }
             self.send_json(client_socket, response)
             logger.debug(f"handle_register: Отправлен register_ok пользователю {username}")
-            
+
             # Отправляем оффлайн сообщения и приглашения в группы
             self.send_offline_messages(username, client_socket)
             self.send_pending_group_invites(username, client_socket)
+
+            self.send_user_groups(username, client_socket)
             
         except Exception as e:
             logger.error(f"handle_register: Ошибка регистрации пользователя {username}: {e}")
@@ -527,10 +886,10 @@ class SecureMessengerServer:
             
             with self.clients_lock:
                 online_users = list(self.user_sockets.keys())
-                logger.debug(f"handle_search: Онлайн пользователи для поиска: {online_users}")
+                logger.debug(f"handle_search: Все пользователи для поиска: {online_users}")
                 
                 for username in online_users:
-                    if username != current_user and search_term in username.lower():
+                    if username != current_user and search_term in username:#.lower():
                         all_users_set.add(username)
                         results.append({
                             'username': username,
@@ -927,7 +1286,7 @@ class SecureMessengerServer:
         
         # Проверяем, существует ли уже группа с таким ID
         with self.groups_lock:
-            if group_id in self.groups:
+            if group_name in self.groups:
                 logger.warning(f"handle_group_create: Группа {group_id} уже существует")
                 self.send_error(client_socket, "Группа с таким ID уже существует")
                 return
